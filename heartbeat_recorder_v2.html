@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Heartbeat Acoustic Recorder</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --accent: #ef4444;
+            --accent-hover: #dc2626;
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+            --success: #22c55e;
+            --error-bg: rgba(239, 68, 68, 0.15);
+            --error-border: #f87171;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background-color: var(--card-bg);
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        p.subtitle {
+            font-size: 0.9rem;
+            color: var(--text-sub);
+            margin-bottom: 20px;
+        }
+
+        .error-banner {
+            display: none;
+            background-color: var(--error-bg);
+            border: 1px solid var(--error-border);
+            color: #fca5a5;
+            padding: 12px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            font-size: 0.85rem;
+            text-align: left;
+            line-height: 1.4;
+        }
+
+        .instructions {
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: left;
+            margin-bottom: 24px;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: var(--text-sub);
+        }
+
+        .instructions ol {
+            padding-left: 20px;
+        }
+
+        .instructions li {
+            margin-bottom: 6px;
+        }
+
+        .visualizer-container {
+            width: 100%;
+            height: 120px;
+            background-color: #090d16;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+            position: relative;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .timer {
+            font-size: 2rem;
+            font-weight: bold;
+            font-family: monospace;
+            margin-bottom: 16px;
+            color: var(--text-main);
+        }
+
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-record {
+            background-color: var(--accent);
+            color: white;
+        }
+
+        .btn-record:active {
+            transform: scale(0.98);
+        }
+
+        .btn-record.recording {
+            background-color: #334155;
+            animation: pulse 1.5s infinite;
+        }
+
+        .btn-download {
+            background-color: var(--success);
+            color: white;
+            display: none;
+        }
+
+        audio {
+            width: 100%;
+            margin-top: 16px;
+            display: none;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
+
+        .badge {
+            display: inline-block;
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="badge">Acoustic Medical Tool</div>
+    <h1>Heartbeat Recorder</h1>
+    <p class="subtitle">Zero-installation mobile acoustic recorder</p>
+
+    <div id="errorBanner" class="error-banner"></div>
+
+    <div class="instructions">
+        <strong>How to record:</strong>
+        <ol>
+            <li>Go to a quiet room with minimal background noise.</li>
+            <li>Remove phone case and clothing over your left chest.</li>
+            <li>Press the <strong>bottom microphone</strong> firmly against your chest.</li>
+            <li>Press <strong>Start Recording</strong> and remain silent for 15 seconds.</li>
+        </ol>
+    </div>
+
+    <div class="visualizer-container">
+        <canvas id="waveform"></canvas>
+    </div>
+
+    <div class="timer" id="timer">00:00</div>
+
+    <div class="btn-group">
+        <button id="recordBtn" class="btn-record">Start Recording</button>
+        <button id="downloadBtn" class="btn-download">Download Clean WAV Audio</button>
+    </div>
+
+    <audio id="audioPreview" controls></audio>
+</div>
+
+<script>
+    let audioCtx, mediaStream, micSource, filterLow, filterHigh, processor, analyser;
+    let isRecording = false;
+    let audioBuffers = [];
+    let recordStartTime = 0;
+    let timerInterval = null;
+
+    const recordBtn = document.getElementById('recordBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const timerEl = document.getElementById('timer');
+    const audioPreview = document.getElementById('audioPreview');
+    const canvas = document.getElementById('waveform');
+    const canvasCtx = canvas.getContext('2d');
+    const errorBanner = document.getElementById('errorBanner');
+
+    function showError(msg) {
+        errorBanner.style.display = 'block';
+        errorBanner.innerHTML = msg;
+    }
+
+    function clearError() {
+        errorBanner.style.display = 'none';
+        errorBanner.innerHTML = '';
+    }
+
+    // Check Secure Context on load
+    if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        showError("⚠️ <strong>Microphone Blocked by Browser Security:</strong><br>Mobile browsers (Safari/Chrome) require an <strong>HTTPS link</strong> to access the microphone. If you opened this file directly from local storage or over HTTP, please host it on HTTPS (e.g. Netlify Drop or GitHub Pages).");
+    }
+
+    canvas.width = canvas.offsetWidth || 300;
+    canvas.height = canvas.offsetHeight || 120;
+
+    function drawWaveform() {
+        requestAnimationFrame(drawWaveform);
+        canvasCtx.fillStyle = '#090d16';
+        canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (!analyser || !isRecording) {
+            canvasCtx.strokeStyle = '#334155';
+            canvasCtx.lineWidth = 1;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(0, canvas.height / 2);
+            canvasCtx.lineTo(canvas.width, canvas.height / 2);
+            canvasCtx.stroke();
+            return;
+        }
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteTimeDomainData(dataArray);
+
+        canvasCtx.lineWidth = 2;
+        canvasCtx.strokeStyle = '#ef4444';
+        canvasCtx.beginPath();
+
+        const sliceWidth = canvas.width * 1.0 / bufferLength;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0;
+            const y = v * canvas.height / 2;
+
+            if (i === 0) {
+                canvasCtx.moveTo(x, y);
+            } else {
+                canvasCtx.lineTo(x, y);
+            }
+
+            x += sliceWidth;
+        }
+
+        canvasCtx.lineTo(canvas.width, canvas.height / 2);
+        canvasCtx.stroke();
+    }
+
+    drawWaveform();
+
+    recordBtn.addEventListener('click', async () => {
+        if (!isRecording) {
+            await startRecording();
+        } else {
+            stopRecording();
+        }
+    });
+
+    async function startRecording() {
+        clearError();
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showError("⚠️ Your browser does not support or allow microphone access in this environment. Please open this link over <strong>HTTPS</strong>.");
+            return;
+        }
+
+        try {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!audioCtx) {
+                audioCtx = new AudioContextClass({ sampleRate: 44100 });
+            }
+
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+
+            // Disable browser voice cancelation to capture low frequencies (20-150Hz)
+            const constraints = {
+                audio: {
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                    channelCount: 1
+                }
+            };
+
+            mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+            micSource = audioCtx.createMediaStreamSource(mediaStream);
+
+            // Digital Bandpass Filter (20Hz - 150Hz)
+            filterHigh = audioCtx.createBiquadFilter();
+            filterHigh.type = 'highpass';
+            filterHigh.frequency.setValueAtTime(20, audioCtx.currentTime);
+
+            filterLow = audioCtx.createBiquadFilter();
+            filterLow.type = 'lowpass';
+            filterLow.frequency.setValueAtTime(150, audioCtx.currentTime);
+
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+
+            processor = audioCtx.createScriptProcessor(4096, 1, 1);
+            audioBuffers = [];
+
+            processor.onaudioprocess = (e) => {
+                if (!isRecording) return;
+                const inputData = e.inputBuffer.getChannelData(0);
+                audioBuffers.push(new Float32Array(inputData));
+            };
+
+            micSource.connect(filterHigh);
+            filterHigh.connect(filterLow);
+            filterLow.connect(analyser);
+            filterLow.connect(processor);
+            processor.connect(audioCtx.destination);
+
+            isRecording = true;
+            recordBtn.textContent = 'Stop & Process Audio';
+            recordBtn.classList.add('recording');
+            downloadBtn.style.display = 'none';
+            audioPreview.style.display = 'none';
+
+            recordStartTime = Date.now();
+            timerInterval = setInterval(updateTimer, 100);
+
+        } catch (err) {
+            console.error(err);
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                showError("⚠️ <strong>Microphone Permission Denied:</strong> Please allow microphone access in your browser pop-up or phone settings.");
+            } else if (err.name === 'SecurityError') {
+                showError("⚠️ <strong>Security Error:</strong> Microphone access is restricted. Make sure you are using an HTTPS link.");
+            } else {
+                showError("⚠️ <strong>Error starting recording:</strong> " + err.message);
+            }
+        }
+    }
+
+    function stopRecording() {
+        isRecording = false;
+        clearInterval(timerInterval);
+
+        if (processor) processor.disconnect();
+        if (filterLow) filterLow.disconnect();
+        if (filterHigh) filterHigh.disconnect();
+        if (micSource) micSource.disconnect();
+        if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+
+        recordBtn.textContent = 'Record Again';
+        recordBtn.classList.remove('recording');
+
+        let totalLength = audioBuffers.reduce((acc, buf) => acc + buf.length, 0);
+        if (totalLength === 0) {
+            showError("No audio was recorded.");
+            return;
+        }
+
+        let mergedBuffer = new Float32Array(totalLength);
+        let offset = 0;
+        for (let buf of audioBuffers) {
+            mergedBuffer.set(buf, offset);
+            offset += buf.length;
+        }
+
+        let audioBuf = audioCtx.createBuffer(1, mergedBuffer.length, audioCtx.sampleRate);
+        audioBuf.getChannelData(0).set(mergedBuffer);
+
+        const recordedBlob = bufferToWave(audioBuf, audioBuf.length);
+        const audioUrl = URL.createObjectURL(recordedBlob);
+
+        audioPreview.src = audioUrl;
+        audioPreview.style.display = 'block';
+
+        downloadBtn.style.display = 'block';
+        downloadBtn.onclick = () => {
+            const a = document.createElement('a');
+            a.href = audioUrl;
+            a.download = `heartbeat_${new Date().toISOString().slice(0,19).replace(/[:T]/g,"_")}.wav`;
+            a.click();
+        };
+    }
+
+    function updateTimer() {
+        const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
+        const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const secs = String(elapsed % 60).padStart(2, '0');
+        timerEl.textContent = `${mins}:${secs}`;
+    }
+
+    function bufferToWave(abuffer, len) {
+        var numOfChan = abuffer.numberOfChannels,
+            length = len * numOfChan * 2 + 44,
+            buffer = new ArrayBuffer(length),
+            view = new DataView(buffer),
+            channels = [], i, sample,
+            offset = 0,
+            pos = 0;
+
+        setUint32(0x46464952);
+        setUint32(length - 8);
+        setUint32(0x45564157);
+        setUint32(0x20746d66);
+        setUint32(16);
+        setUint16(1);
+        setUint16(numOfChan);
+        setUint32(abuffer.sampleRate);
+        setUint32(abuffer.sampleRate * 2 * numOfChan);
+        setUint16(numOfChan * 2);
+        setUint16(16);
+        setUint32(0x61746164);
+        setUint32(length - pos - 4);
+
+        for(i = 0; i < abuffer.numberOfChannels; i++)
+            channels.push(abuffer.getChannelData(i));
+
+        while(pos < len) {
+            for(i = 0; i < numOfChan; i++) {
+                sample = Math.max(-1, Math.min(1, channels[i][pos]));
+                sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0;
+                view.setInt16(offset, sample, true);
+                offset += 2;
+            }
+            pos++;
+        }
+
+        return new Blob([buffer], {type: "audio/wav"});
+
+        function setUint16(data) {
+            view.setUint16(offset, data, true);
+            offset += 2;
+        }
+
+        function setUint32(data) {
+            view.setUint32(offset, data, true);
+            offset += 4;
+        }
+    }
+</script>
+
+</body>
+</html>
